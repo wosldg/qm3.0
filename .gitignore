@@ -1,0 +1,25 @@
+# jingqu 子目录的 git 元数据(避免嵌套仓库)
+jingqu/.git/
+
+# ---- 构建产物 ----
+jingqu/backend/build/
+jingqu/frontend/dist/
+jingqu/frontend/node_modules/
+
+# ---- 运行时数据 / 日志 ----
+jingqu/logs/
+jingqu/data/
+jingqu/backend/data/*.db-wal
+jingqu/backend/data/*.db-shm
+jingqu/backend/logs/
+
+# ---- 文档 (不需要上传) ----
+*.md.md
+*miaoda-code*
+*森林公园*
+*景区避峰*
+*武陵源*
+
+# ---- 编辑器 ----
+jingqu/backend/.vscode/
+jingqu/frontend/.vscode/
