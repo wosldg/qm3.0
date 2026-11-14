@@ -3,8 +3,8 @@
 ## 1. 克隆仓库
 
 ```bash
-git clone https://github.com/wosldg/qm2.0.git
-cd qm2.0\jingqu
+git clone https://github.com/wosldg/qm3.0.git
+cd qm3.0\jingqu
 ```
 
 ## 2. 配置后端开发环境
