@@ -10,6 +10,19 @@
 
 namespace scenicflow {
 
+struct SpotState {
+    std::string spotId;
+    std::string name;
+    int capacity = 0;
+    int currentVisitors = 0;
+    double locationX = 0;
+    double locationY = 0;
+    double arrivalRate = 0;
+    double ratio() const {
+        return capacity > 0 ? static_cast<double>(currentVisitors) / capacity : 0.0;
+    }
+};
+
 struct ShuttleLoad {
     std::string shuttleId;
     std::string name;

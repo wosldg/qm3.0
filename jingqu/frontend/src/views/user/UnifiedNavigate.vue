@@ -41,7 +41,25 @@ const focusId = ref('')
 const recommendNetwork = ref<TrailNetwork | null>(null)
 const refiningRoute = ref(false)
 
-const currentRoute = computed(() => (routeType.value === 'avoid' ? avoidRoute.value : classicRoute.value))
+const selectedGate = ref('')
+
+const currentRoute = computed<RecommendData | null>(() => {
+  const base = (routeType.value === 'avoid' ? avoidRoute.value : classicRoute.value) as any
+  if (!base) return null
+  const routes = base.routes as any[] | undefined
+  if (routes?.length && selectedGate.value) {
+    const found = routes.find((r) => String(r.name || '').includes(selectedGate.value))
+    if (found) return found as RecommendData
+  }
+  return base as RecommendData
+})
+
+/** 可选的门（后端返回 gates 数组） */
+const gateOptions = computed<string[]>(() => {
+  const base = (routeType.value === 'avoid' ? avoidRoute.value : classicRoute.value) as any
+  return (base?.gates as string[]) || []
+})
+
 const lineColor = computed(() => (routeType.value === 'avoid' ? '#67C23A' : '#909399'))
 
 /** 细化后的路径点（用于地图显示） */
@@ -193,18 +211,23 @@ async function fetchRoutes() {
     getUserRecommendRoutes('avoid'),
     getUserRecommendRoutes('classic'),
   ])
-  console.log('[fetchRoutes] av:', av.status, av.status === 'fulfilled' ? av.value?.data : av.reason)
-  console.log('[fetchRoutes] cl:', cl.status, cl.status === 'fulfilled' ? cl.value?.data : cl.reason)
-  if (av.status === 'fulfilled') avoidRoute.value = av.value.data
-  if (cl.status === 'fulfilled') classicRoute.value = cl.value.data
-  console.log('[fetchRoutes] avoidRoute:', avoidRoute.value, 'classicRoute:', classicRoute.value)
-  console.log('[fetchRoutes] currentRoute:', currentRoute.value)
+  if (av.status === 'fulfilled') avoidRoute.value = av.value?.data ?? null
+  if (cl.status === 'fulfilled') classicRoute.value = cl.value?.data ?? null
+
+  // 初始化默认门
+  if (!selectedGate.value) {
+    const gates = gateOptions.value
+    if (gates.length) selectedGate.value = gates[0]
+  }
+
   // 加载路网并细化路径
   await loadAndRefineRoute()
 }
 
 // 路线类型切换时重新细化（首次加载由 fetchRoutes 末尾统一触发，避免重复规划）
 watch(routeType, () => loadAndRefineRoute())
+// 切换出发门时重新细化路线
+watch(selectedGate, () => loadAndRefineRoute())
 
 // ==================== 模式切换 ====================
 function onModeChange() {
@@ -469,14 +492,24 @@ watch(navMode, () => initMode())
           <el-radio-button value="avoid">🌿 避峰路线</el-radio-button>
           <el-radio-button value="classic">🏯 经典路线</el-radio-button>
         </el-radio-group>
+
+        <el-radio-group
+          v-if="gateOptions.length"
+          v-model="selectedGate"
+          size="small"
+          class="switch gate-switch"
+        >
+          <el-radio-button v-for="g in gateOptions" :key="g" :value="g">{{ g }}</el-radio-button>
+        </el-radio-group>
+
         <p v-if="currentRoute?.message" class="route-message">{{ currentRoute.message }}</p>
 
-        <template v-if="currentRoute?.steps.length">
+        <template v-if="currentRoute?.steps?.length">
           <div class="step-label">
-            途径 {{ currentRoute.steps.length }} 个景点 · 步行约 {{ currentRoute.totalDistanceM }} 米
+            途径 {{ currentRoute.steps?.length }} 个景点 · 步行约 {{ currentRoute.totalDistanceM }} 米
           </div>
           <div
-            v-for="s in currentRoute.steps"
+            v-for="s in currentRoute.steps || []"
             :key="s.spotId"
             class="step-row"
             :class="{ active: focusId === s.spotId }"
@@ -487,7 +520,8 @@ watch(navMode, () => initMode())
             <LevelTag :level="s.level" />
           </div>
         </template>
-        <el-skeleton v-else :rows="3" animated />
+        <el-skeleton v-else-if="!currentRoute" :rows="3" animated />
+        <el-empty v-else description="暂无可用路线" :image-size="60" />
       </el-card>
     </template>
 
