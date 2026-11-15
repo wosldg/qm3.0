@@ -1,7 +1,14 @@
 <template>
   <div class="amap-wrap" :style="{ height }">
     <div ref="mapRef" class="amap"></div>
-    <div v-if="loadFailed" class="map-fallback">高德地图加载失败，请检查网络后刷新</div>
+    <div v-if="loadFailed" class="map-fallback">
+      <div class="fallback-content">
+        <div class="fallback-icon">🗺️</div>
+        <div class="fallback-text">高德地图加载失败</div>
+        <div class="fallback-hint">请检查网络连接后刷新页面</div>
+        <button class="retry-btn" @click="retryLoad">重新加载</button>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -156,17 +163,38 @@ function initMap() {
 
 onMounted(() => {
   // 高德脚本在 index.html 中同步加载，网络慢时轮询等待
+  // 最多等待 3 秒，超时后显示降级提示
   let tries = 0
   const timer = window.setInterval(() => {
     if (window.AMap) {
       window.clearInterval(timer)
       initMap()
-    } else if (++tries > 50) {
+    } else if (++tries > 30) {
       window.clearInterval(timer)
       loadFailed.value = true
     }
   }, 100)
 })
+
+// 暴露方法供父组件调用以手动触发地图初始化
+defineExpose({ initMap })
+
+// 重新加载地图
+function retryLoad() {
+  loadFailed.value = false
+  if (map) {
+    map.destroy()
+    map = null
+  }
+  markers = []
+  polyline = null
+  initMap()
+}
+
+// 监听 props 变化，确保地图初始化后也能渲染路线
+watch(() => props.points, (newVal) => {
+  if (map && newVal?.length) renderMarkers()
+}, { deep: true })
 
 onUnmounted(() => {
   if (map) map.destroy()
@@ -196,8 +224,44 @@ watch(() => props.focusId, focusMarker)
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #909399;
-  font-size: 13px;
   background: #f5f7fa;
+}
+
+.fallback-content {
+  text-align: center;
+  padding: 20px;
+}
+
+.fallback-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+}
+
+.fallback-text {
+  font-size: 16px;
+  font-weight: 600;
+  color: #303133;
+  margin-bottom: 8px;
+}
+
+.fallback-hint {
+  font-size: 13px;
+  color: #909399;
+  margin-bottom: 16px;
+}
+
+.retry-btn {
+  padding: 8px 24px;
+  background: #409eff;
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.retry-btn:hover {
+  background: #66b1ff;
 }
 </style>

@@ -28,6 +28,12 @@ int parseRangeDays(const std::string& range) {
     return 7;
 }
 
+struct SimulationConfig {
+    double arrivalRate = 0;
+    std::string pattern = "STEADY";
+    int durationMinutes = 0;
+};
+
 Json::Value simulationStateToJson(bool running, const SimulationConfig& cfg) {
     Json::Value config;
     config["arrivalRate"] = cfg.arrivalRate;

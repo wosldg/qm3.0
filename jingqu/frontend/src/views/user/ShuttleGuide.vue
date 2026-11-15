@@ -34,9 +34,9 @@
     <!-- 地图 -->
     <el-card shadow="never" class="card map-card">
       <AMapView
-        :points="navMarkers"
-        :route-path="navRoutePath"
-        :line-color="'#409EFF'"
+        :points="displayMarkers"
+        :route-path="displayRoutePath"
+        :line-color="displayColor"
         height="400px"
       />
       <div class="map-legend" v-if="!isNavigating">
@@ -111,29 +111,6 @@ const activeName = ref<string>('')
 
 const lineColors = ['#409EFF', '#67C23A', '#E6A23C', '#F56C6C', '#909399', '#722ED1', '#13C2C2', '#EE0A24']
 
-const mapMarkers = computed<MapMarker[]>(() => {
-  const set = new Set<string>()
-  const markers: MapMarker[] = []
-  for (const r of routes.value) {
-    const path = (r as any).path as any[] | undefined
-    if (!path) continue
-    for (const pt of path) {
-      const key = `${pt.latitude},${pt.longitude}`
-      if (!set.has(key) && pt.latitude !== '0' && pt.longitude !== '0') {
-        set.add(key)
-        markers.push({
-          id: `st_${key}`,
-          name: '',
-          type: 'spot' as const,
-          longitude: parseFloat(pt.longitude),
-          latitude: parseFloat(pt.latitude),
-        })
-      }
-    }
-  }
-  return markers
-})
-
 const activePath = computed<MapMarker[]>(() => {
   const route = routes.value.find(r => r.routeName === activeName.value)
   if (!route) return []
@@ -144,6 +121,23 @@ const activePath = computed<MapMarker[]>(() => {
     .map((pt: any) => ({
       id: '',
       name: '',
+      type: 'spot' as const,
+      longitude: parseFloat(pt.longitude),
+      latitude: parseFloat(pt.latitude),
+    }))
+})
+
+// 选中线路的站点标记（path[0] 为起点，之后每点对应 stations[i-1]）
+const activeMarkers = computed<MapMarker[]>(() => {
+  const route = routes.value.find(r => r.routeName === activeName.value)
+  if (!route) return []
+  const path = (route as any).path as any[] | undefined
+  if (!path) return []
+  return path
+    .filter((pt: any) => pt.latitude !== '0' && pt.longitude !== '0')
+    .map((pt: any, i: number) => ({
+      id: `st_${activeName.value}_${i}`,
+      name: route.stations?.[i - 1] || (i === 0 ? `${route.routeName} 起点` : ''),
       type: 'spot' as const,
       longitude: parseFloat(pt.longitude),
       latitude: parseFloat(pt.latitude),
@@ -224,6 +218,15 @@ const navDistanceText = computed(() => {
   if (navDistance.value < 1000) return `${navDistance.value} 米`
   return `${(navDistance.value / 1000).toFixed(1)} 公里`
 })
+
+// 导航中显示步行路线，否则显示当前选中线路
+const displayRoutePath = computed<MapMarker[]>(() =>
+  isNavigating.value ? navRoutePath.value : activePath.value,
+)
+const displayMarkers = computed<MapMarker[]>(() =>
+  isNavigating.value ? navMarkers.value : activeMarkers.value,
+)
+const displayColor = computed(() => (isNavigating.value ? '#409EFF' : activeColor.value))
 
 // 启动浏览器定位
 function startLocation() {
@@ -414,6 +417,12 @@ async function fetchData() {
     const res = await getUserShuttleRoutes()
     console.log('[ShuttleGuide] API response:', res)
     routes.value = res.data || []
+
+    // 默认选中第一条线路，保证地图上有路线可看
+    if (routes.value.length) {
+      const exists = routes.value.some(r => r.routeName === activeName.value)
+      if (!exists) activeName.value = routes.value[0].routeName
+    }
     
     // 同时获取站点 POI 数据
     const poiRes = await getUserPois()

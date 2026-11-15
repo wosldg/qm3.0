@@ -1,4 +1,5 @@
 #include "pipeline/RuleEngine.h"
+#include "pipeline/SchedulingEngine.h"
 
 #include "core/Logger.h"
 #include "core/Settings.h"
@@ -56,8 +57,21 @@ void RuleEngine::evaluate() {
         "SELECT * FROM rule WHERE status=1 ORDER BY priority, id");
     if (ruleRows.empty()) return;
 
-    const auto spots = Database::instance().query(
-        "SELECT spot_id, name, instant_capacity, current_visitors FROM scenic_spot WHERE status=1");
+    const auto spotRows = Database::instance().query(
+        "SELECT spot_id, name, instant_capacity, current_visitors, location_x, location_y, "
+        "arrival_rate FROM scenic_spot WHERE status=1");
+    std::vector<SpotState> spots;
+    for (const auto& r : spotRows) {
+        SpotState s;
+        s.spotId = field(r, "spot_id");
+        s.name = field(r, "name");
+        s.capacity = toInt(field(r, "instant_capacity"));
+        s.currentVisitors = toInt(field(r, "current_visitors"));
+        s.locationX = toDouble(field(r, "location_x"));
+        s.locationY = toDouble(field(r, "location_y"));
+        s.arrivalRate = toDouble(field(r, "arrival_rate"));
+        spots.push_back(s);
+    }
     auto parkingRows = Database::instance().query(
         "SELECT * FROM parking_lot WHERE status=1 ORDER BY id");
     auto shuttleRows = Database::instance().query("SELECT * FROM shuttle_bus ORDER BY id");

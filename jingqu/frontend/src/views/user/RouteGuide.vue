@@ -1,18 +1,33 @@
 <template>
   <div class="page">
-    <!-- 路线类型切换：切换后地图自动清旧线、画新线并缩放适配 -->
+    <!-- 路线类型切换 -->
     <el-radio-group v-model="routeType" size="small" class="switch">
       <el-radio-button label="avoid">🌿 避峰路线</el-radio-button>
       <el-radio-button label="classic">🏯 经典路线</el-radio-button>
     </el-radio-group>
 
+    <!-- 门的切换 -->
+    <div v-if="gateList.length" class="gate-switch">
+      <el-button
+        v-for="g in gateList"
+        :key="g"
+        size="small"
+        :type="selectedGate === g ? 'primary' : ''"
+        @click="selectedGate = g"
+      >
+        {{ g }}
+      </el-button>
+    </div>
+
     <el-card shadow="never" class="card">
       <AMapView
+        ref="mapViewRef"
         :points="markers"
         :route-path="currentRoute?.steps || []"
         :line-color="lineColor"
         :focus-id="focusId"
         height="340px"
+        @marker-click="focusSpot"
       />
     </el-card>
 
@@ -23,7 +38,7 @@
       </div>
       <p v-if="currentRoute?.message" class="route-message">{{ currentRoute.message }}</p>
 
-      <template v-if="currentRoute?.steps.length">
+      <template v-if="currentRoute?.steps && currentRoute.steps.length">
         <div class="step-label">
           途径 {{ currentRoute.steps.length }} 个景点 · 步行约 {{ currentRoute.totalDistanceM }} 米
         </div>
@@ -31,12 +46,12 @@
           v-for="s in currentRoute.steps"
           :key="s.spotId"
           class="step-row"
-          :class="{ active: focusId === s.spotId }"
+          :class="{ active: focusId === s.spotId, isGate: s.isGate }"
           @click="focusSpot(s.spotId)"
         >
-          <span class="step-no">{{ s.order }}</span>
+          <span class="step-no" :class="{ gate: s.isGate }">{{ s.order }}</span>
           <span class="step-name">{{ s.name }}</span>
-          <LevelTag :level="s.level" />
+          <LevelTag v-if="!s.isGate" :level="s.level" />
         </div>
       </template>
       <el-skeleton v-else :rows="3" animated />
@@ -49,36 +64,43 @@ import { ref, computed, nextTick } from 'vue'
 import AMapView from '@/components/user/AMapView.vue'
 import LevelTag from '@/components/LevelTag.vue'
 import { getUserRecommendRoutes } from '@/api'
-import type { MapMarker, RecommendData } from '@/api'
+import type { MapMarker } from '@/api'
 import { usePolling } from '@/composables/usePolling'
 
+const mapViewRef = ref<InstanceType<typeof AMapView> | null>(null)
 const routeType = ref<'avoid' | 'classic'>('avoid')
-const avoidRoute = ref<RecommendData | null>(null)
-const classicRoute = ref<RecommendData | null>(null)
+
+// All route data
+const allRoutes = ref<any[]>([])
+const gateList = ref<string[]>([])
+const selectedGate = ref('')
 const focusId = ref('')
 
-const currentRoute = computed(() => (routeType.value === 'avoid' ? avoidRoute.value : classicRoute.value))
+// Current route based on type and selected gate
+const currentRoute = computed(() => {
+  if (!allRoutes.value.length) return null
+  if (!selectedGate.value) return allRoutes.value[0]
+  const found = allRoutes.value.find((r: any) => r.name.includes(selectedGate.value))
+  return found || allRoutes.value[0]
+})
 
-// 经典路线灰色、避峰路线绿色
 const lineColor = computed(() => (routeType.value === 'avoid' ? '#67C23A' : '#909399'))
 
-// 路线上的景点即地图标记点
 const markers = computed<MapMarker[]>(() =>
   (currentRoute.value?.steps || [])
-    .filter((s) => s.longitude && s.latitude)
-    .map((s) => ({
+    .filter((s: any) => s.longitude && s.latitude)
+    .map((s: any) => ({
       id: s.spotId,
       name: s.name,
-      type: 'spot' as const,
-      longitude: s.longitude as number,
-      latitude: s.latitude as number,
+      type: s.isGate ? 'gate' as const : 'spot' as const,
+      longitude: s.longitude,
+      latitude: s.latitude,
       visitors: s.currentVisitors,
       level: s.level,
       levelText: s.levelText,
     })),
 )
 
-// 点击列表景点 → 地图定位到对应标记点（重复点击同一点也能再次定位）
 function focusSpot(id: string) {
   if (focusId.value === id) {
     focusId.value = ''
@@ -88,13 +110,47 @@ function focusSpot(id: string) {
   focusId.value = id
 }
 
+function extractGates(routes: any[]) {
+  const gates = new Set<string>()
+  routes.forEach((r: any) => {
+    const match = r.name?.match(/(.+?)出发/)
+    if (match?.[1]) gates.add(match[1])
+  })
+  return Array.from(gates)
+}
+
+let fetching = false
 async function fetchData() {
-  const [av, cl] = await Promise.allSettled([
-    getUserRecommendRoutes('avoid'),
-    getUserRecommendRoutes('classic'),
-  ])
-  if (av.status === 'fulfilled') avoidRoute.value = av.value.data
-  if (cl.status === 'fulfilled') classicRoute.value = cl.value.data
+  if (fetching) return
+  fetching = true
+  try {
+    const [av, cl] = await Promise.allSettled([
+      getUserRecommendRoutes('avoid'),
+      getUserRecommendRoutes('classic'),
+    ])
+
+    const routes: any[] = []
+
+    if (av.status === 'fulfilled' && av.value?.data?.routes) {
+      routes.push(...av.value.data.routes)
+    }
+
+    if (cl.status === 'fulfilled' && cl.value?.data?.routes) {
+      routes.push(...cl.value.data.routes)
+    }
+
+    allRoutes.value = routes
+    if (routes.length) {
+      gateList.value = extractGates(routes)
+      if (!selectedGate.value) {
+        selectedGate.value = gateList.value[0]
+      }
+    }
+  } catch (err) {
+    console.error('[RouteGuide] fetchData error:', err)
+  } finally {
+    fetching = false
+  }
 }
 
 usePolling(fetchData, 30000)
@@ -139,10 +195,6 @@ usePolling(fetchData, 30000)
   color: #e6a23c;
 }
 
-.steps {
-  margin-top: 12px;
-}
-
 .step-label {
   font-size: 12px;
   color: #909399;
@@ -167,6 +219,12 @@ usePolling(fetchData, 30000)
   border-bottom: none;
 }
 
+.step-row.isGate {
+  background: #fdf6ec;
+  border-radius: 4px;
+  margin: 4px 0;
+}
+
 .step-no {
   width: 20px;
   height: 20px;
@@ -180,9 +238,17 @@ usePolling(fetchData, 30000)
   flex-shrink: 0;
 }
 
+.step-no.gate {
+  background: #e6a23c;
+}
+
 .step-name {
   flex: 1;
   font-size: 14px;
   color: #303133;
+}
+
+.gate-switch {
+  margin: 8px 0;
 }
 </style>

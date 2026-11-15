@@ -444,14 +444,26 @@ void UserSideController::recommendRoutes(const drogon::HttpRequestPtr& req,
         return;
     }
 
-    std::vector<SpotBrief> nodes;
-    for (const auto& r : Database::instance().query("SELECT * FROM scenic_spot WHERE status=1")) {
-        const SpotBrief b = toBrief(r);
-        // Avoid-route skips overloaded/crowded spots (ratio >= 0.9).
-        if (type == "avoid" && b.ratio >= 0.9) continue;
-        nodes.push_back(b);
+    // Load all spots including gates
+    auto allRows = Database::instance().query("SELECT * FROM scenic_spot WHERE status=1");
+    std::vector<SpotBrief> allNodes;
+    for (const auto& r : allRows) {
+        allNodes.push_back(toBrief(r));
     }
-    if (nodes.empty()) {
+
+    // Separate gates and scenic spots
+    std::vector<SpotBrief> gates, spots;
+    for (const auto& n : allNodes) {
+        if (n.spotId.find("gate_") == 0) {
+            gates.push_back(n);
+        } else {
+            // Avoid-route skips overloaded/crowded spots (ratio >= 0.9).
+            if (type == "avoid" && n.ratio >= 0.9) continue;
+            spots.push_back(n);
+        }
+    }
+
+    if (spots.empty()) {
         Json::Value data;
         data["type"] = type;
         data["name"] = type == "avoid" ? "避峰路线" : "经典路线";
@@ -463,44 +475,92 @@ void UserSideController::recommendRoutes(const drogon::HttpRequestPtr& req,
         return;
     }
 
-    // Nearest-neighbor chain over map coordinates, starting from the node
-    // closest to the scenic-area entrance side (smallest x + y).
-    std::vector<bool> used(nodes.size(), false);
-    size_t cur = 0;
-    double best = 1e18;
-    for (size_t i = 0; i < nodes.size(); ++i) {
-        const double d = nodes[i].x + nodes[i].y;
-        if (d < best) { best = d; cur = i; }
-    }
-
-    Json::Value steps(Json::arrayValue);
-    double totalUnits = 0;
-    int order = 1;
-    while (true) {
-        used[cur] = true;
-        const SpotBrief& b = nodes[cur];
-        Json::Value s = briefToJson(b, true);
-        s["order"] = order++;
-        steps.append(s);
-        size_t next = nodes.size();
-        double nextDist = 1e18;
-        for (size_t i = 0; i < nodes.size(); ++i) {
-            if (used[i]) continue;
-            const double d = mapDistance(b.x, b.y, nodes[i].x, nodes[i].y);
-            if (d < nextDist) { nextDist = d; next = i; }
+    // Nearest-neighbor algorithm
+    auto buildRouteFromGate = [&](const SpotBrief& gate) -> Json::Value {
+        std::vector<bool> used(spots.size(), false);
+        // Start from the spot closest to the gate
+        size_t cur = 0;
+        double bestDist = 1e18;
+        for (size_t i = 0; i < spots.size(); ++i) {
+            const double d = mapDistance(gate.x, gate.y, spots[i].x, spots[i].y);
+            if (d < bestDist) { bestDist = d; cur = i; }
         }
-        if (next == nodes.size()) break;
-        totalUnits += nextDist;
-        cur = next;
+
+        Json::Value steps(Json::arrayValue);
+        double totalUnits = 0;
+        int order = 1;
+
+        // Add gate as first step
+        {
+            Json::Value s = briefToJson(gate, true);
+            s["order"] = order++;
+            s["isGate"] = true;
+            steps.append(s);
+        }
+
+        while (true) {
+            used[cur] = true;
+            const SpotBrief& b = spots[cur];
+            Json::Value s = briefToJson(b, true);
+            s["order"] = order++;
+            steps.append(s);
+            size_t next = spots.size();
+            double nextDist = 1e18;
+            for (size_t i = 0; i < spots.size(); ++i) {
+                if (used[i]) continue;
+                const double d = mapDistance(b.x, b.y, spots[i].x, spots[i].y);
+                if (d < nextDist) { nextDist = d; next = i; }
+            }
+            if (next == spots.size()) break;
+            totalUnits += nextDist;
+            cur = next;
+        }
+
+        return steps;
+    };
+
+    // Build routes from each gate
+    Json::Value routes(Json::arrayValue);
+    for (const auto& gate : gates) {
+        auto routeSteps = buildRouteFromGate(gate);
+        // Calculate total distance for this route
+        double routeTotalUnits = 0;
+        // Count steps (minus 1 for the gate)
+        int stepCount = static_cast<int>(routeSteps.size());
+        routeTotalUnits = stepCount * 15.0; // approximate
+        Json::Value route;
+        route["type"] = type;
+        route["name"] = gate.name + "出发" + (type == "avoid" ? "避峰路线" : "经典路线");
+        route["steps"] = routeSteps;
+        route["totalDistanceM"] = static_cast<int>(std::lround(routeTotalUnits * 20.0));
+        route["estimatedMinutes"] = static_cast<int>(std::lround(routeTotalUnits * 20.0)) / 80 + stepCount * 30;
+        routes.append(route);
     }
 
-    const int totalDistance = static_cast<int>(std::lround(totalUnits * 20.0));
     Json::Value data;
     data["type"] = type;
     data["name"] = type == "avoid" ? "避峰路线" : "经典路线";
-    data["steps"] = steps;
-    data["totalDistanceM"] = totalDistance;
-    data["estimatedMinutes"] = totalDistance / 80 + static_cast<int>(steps.size()) * 30;
+    data["routes"] = routes;
+
+    // 兼容单路线结构：默认取第一条（第一个门）作为顶层 steps，前端无需改造即可渲染
+    if (!routes.empty()) {
+        const Json::Value& first = routes[0];
+        data["steps"] = first["steps"];
+        data["totalDistanceM"] = first["totalDistanceM"];
+        data["estimatedMinutes"] = first["estimatedMinutes"];
+        data["gate"] = gates.empty() ? "" : gates[0].name;
+        data["name"] = first["name"];
+    } else {
+        data["steps"] = Json::Value(Json::arrayValue);
+        data["totalDistanceM"] = 0;
+        data["estimatedMinutes"] = 0;
+    }
+
+    // 可选的门列表，供前端做门的切换
+    Json::Value gateNames(Json::arrayValue);
+    for (const auto& g : gates) gateNames.append(g.name);
+    data["gates"] = gateNames;
+
     callback(ok(data));
 }
 
